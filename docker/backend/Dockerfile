@@ -1,27 +1,35 @@
 # ----------------------- base -----------------
-FROM node:22-alpine AS base
+FROM node:18-bullseye AS base
 
 USER root
-# Update image
-RUN apk update && apk upgrade --available && apk add --no-cache g++ make python3
+
+# Update image and install necessary tools
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+    g++ \
+    make \
+    python3 \
+    curl
+
+# Install libssl1.1
+RUN curl -O http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.23_amd64.deb && \
+    dpkg -i libssl1.1_1.1.1f-1ubuntu2.23_amd64.deb && \
+    rm libssl1.1_1.1.1f-1ubuntu2.23_amd64.deb && \
+    apt-get install -f -y
 
 COPY . /app
 WORKDIR /app
 
 # Add NX
-RUN yarn global add nx@latest 
+RUN yarn global add nx@latest
 
 # ----------------------- dependencies -----------------
 FROM base AS deps
 
+# Install development dependencies
 RUN npm install --only=development
 
-# ------------------------ builder ---------------
+# ------------------------ builder ---------------------
 FROM base AS builder
-
-# add non root user
-# RUN addgroup -S namviek && \
-#   adduser -S -G namviek namviek
 
 WORKDIR /app
 
@@ -32,36 +40,32 @@ COPY ${ENV_FILE} .env
 
 COPY --from=deps /app/node_modules ./node_modules
 
+# Build the application
 RUN yarn generate2
 RUN yarn build:be
 
 # ------------------------ runner ---------------------
-FROM node:22-alpine AS runner
+FROM node:18-bullseye AS runner
 
 WORKDIR /app
 
+# Copy necessary files from builder
 COPY --from=builder /app/dist/apps/backend ./
 COPY ./packages/database/src/prisma/schema.prisma .
 COPY ./yarn.lock .
 
-# Only need MONGODB_URL in .env file
+# Copy environment file
 COPY .env .env
 
-# RUN yarn install --frozen-lockfile
-RUN yarn install
+# Install only production dependencies
+RUN yarn install --production
 
-
-# ---------------- TEST ------------
+# Ensure Prisma runtime dependencies are included
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-# --------------------------------
 
-
+# Expose application port
 ENV PORT=3000
-
 EXPOSE 3000
 
-
-# CMD HOSTNAME="0.0.0.0" node main.js
+# Start the application
 CMD ["node", "main.js"]
-# CMD ["node", "test.js"]
-
